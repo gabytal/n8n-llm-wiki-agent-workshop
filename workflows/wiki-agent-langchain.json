@@ -20,7 +20,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const fs = require('fs');\nconst { execSync } = require('child_process');\n\nconst repoPath = '/tmp/wiki-repo';\nconst repoUrl = 'https://github.com/gabytal/n8n-llm-wiki-agent-workshop.git';\n\ntry {\n  if (fs.existsSync(repoPath + '/.git')) {\n    execSync(`cd ${repoPath} && git pull --ff-only`, { encoding: 'utf-8' });\n  } else {\n    execSync(`git clone ${repoUrl} ${repoPath}`, { encoding: 'utf-8' });\n  }\n  return [{ json: { ...$input.first().json, repoPath, status: 'ready' } }];\n} catch (err) {\n  return [{ json: { ...$input.first().json, repoPath, status: 'error', error: err.message } }];\n}"
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst { execSync } = require('child_process');\n\nconst repoPath = '/tmp/wiki-repo';\nconst repoUrl = 'https://github.com/gabytal/n8n-llm-wiki-agent-workshop.git';\n\ntry {\n  if (fs.existsSync(repoPath + '/.git')) {\n    execSync(`cd ${repoPath} && git pull --ff-only`, { encoding: 'utf-8' });\n  } else {\n    execSync(`git clone ${repoUrl} ${repoPath}`, { encoding: 'utf-8' });\n  }\n  const indexPath = path.join(repoPath, 'index.html');\n  const wikiIndex = fs.existsSync(indexPath) ? fs.readFileSync(indexPath, 'utf-8') : '';\n  return [{ json: { ...$input.first().json, repoPath, wikiIndex, status: 'ready' } }];\n} catch (err) {\n  return [{ json: { ...$input.first().json, repoPath, wikiIndex: '', status: 'error', error: err.message } }];\n}"
       },
       "id": "sync-repo",
       "name": "Sync Wiki Repo",
@@ -36,7 +36,7 @@
         "promptType": "define",
         "text": "={{ $json.body.chatInput }}",
         "options": {
-          "systemMessage": "You are a knowledge base assistant for the LLM Wiki workshop. Answer questions ONLY using the wiki content provided through the tools. The wiki is structured into:\n- concepts/ : LLM Wiki pattern concepts\n- entities/ : people, tools, systems\n- sources/ : original articles and references\n- analysis/ : meta-analysis\n\nALWAYS:\n1. First call list_wiki_files to see what's available\n2. Then call read_wiki_page to load relevant pages\n3. Cite sources using [filename.md] format in your answer\n4. If the answer isn't in the wiki, reply: \"I don't know - not in knowledge base\""
+          "systemMessage": "=You are a knowledge base assistant for the LLM Wiki workshop. Answer questions ONLY using the wiki content provided through the tools. The wiki is structured into:\n- concepts/ : LLM Wiki pattern concepts\n- entities/ : people, tools, systems\n- sources/ : original articles and references\n- analysis/ : meta-analysis\n\nBelow is a curated INDEX of the knowledge base with one-line descriptions of every page. Use it to pick the most relevant file(s) directly — you usually do NOT need to call list_wiki_files first.\n\n--- WIKI INDEX ---\n{{ $json.wikiIndex }}\n--- END INDEX ---\n\nALWAYS:\n1. Use the INDEX above to identify which page(s) likely contain the answer\n2. Call read_wiki_page with the relative path (e.g. 'concepts/llm-wiki-pattern.md') to load the full content\n3. Only call list_wiki_files if the INDEX doesn't cover the topic\n4. Cite sources using [filename.md] format in your answer\n5. If the answer isn't in the wiki, reply: \"I don't know - not in knowledge base\""
         }
       },
       "id": "ai-agent",

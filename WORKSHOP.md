@@ -20,12 +20,14 @@ curl -X POST http://localhost:5678/webhook/wiki-agent \
 Behind the scenes:
 
 ```
-Webhook → Sync Wiki Repo (git clone/pull) → AI Agent ⇄ Tools → Respond
+Webhook → Sync Wiki Repo (git clone/pull + load index.html) → AI Agent ⇄ Tools → Respond
 ```
 
-The agent has two tools it can call:
-- `list_wiki_files` — see what's in the knowledge base
+The agent gets a **curated index** (with one-line descriptions of every page) injected into its system prompt, plus two tools it can call:
 - `read_wiki_page` — load a specific file's content
+- `list_wiki_files` — fallback file listing if the index misses something
+
+> **Why both an index and a list tool?** The index (`index.html`) is hand-curated — it tells the LLM what each page is *about*, not just its filename. That lets the model pick the right page in one shot instead of trial-reading several. The `list_wiki_files` tool is a safety net for content not yet in the index.
 
 ## Prerequisites
 
@@ -87,10 +89,11 @@ Open `Wiki AI Agent (Git)` in the n8n editor. Five nodes:
 
 ### 4.2 Sync Wiki Repo (Code node)
 
-Clones the public wiki repo on first call, pulls on subsequent calls:
+Clones the public wiki repo on first call, pulls on subsequent calls, then loads `index.html` (the curated TOC) so we can inject it into the agent's system prompt:
 
 ```javascript
 const fs = require('fs');
+const path = require('path');
 const { execSync } = require('child_process');
 
 const repoPath = '/tmp/wiki-repo';
@@ -101,30 +104,41 @@ if (fs.existsSync(repoPath + '/.git')) {
 } else {
   execSync(`git clone ${repoUrl} ${repoPath}`);
 }
-return [{ json: { ...$input.first().json, repoPath, status: 'ready' } }];
+const indexPath = path.join(repoPath, 'index.html');
+const wikiIndex = fs.existsSync(indexPath) ? fs.readFileSync(indexPath, 'utf-8') : '';
+return [{ json: { ...$input.first().json, repoPath, wikiIndex, status: 'ready' } }];
 ```
 
 > **Why a Code node?** It needs `child_process` for `git`. `docker-compose.yml` allows this via `NODE_FUNCTION_ALLOW_BUILTIN=fs,path,child_process`.
 
+> **Why load `index.html` here?** We want the agent to know what's in the wiki *before* it thinks about which tool to call. Injecting the index into the system prompt lets the model jump straight to `read_wiki_page('concepts/llm-wiki-pattern.md')` instead of round-tripping through `list_wiki_files` first.
+
 ### 4.3 AI Agent
 
-The brain. Its system prompt enforces the pattern:
+The brain. Its system prompt embeds the wiki index from the Sync node and enforces the pattern:
 
 ```
 You are a knowledge base assistant for the LLM Wiki workshop.
 Answer questions ONLY using the wiki content provided through the tools.
 
+--- WIKI INDEX ---
+{{ $json.wikiIndex }}    ← injected at runtime from index.html
+--- END INDEX ---
+
 ALWAYS:
-1. First call list_wiki_files to see what's available
-2. Then call read_wiki_page to load relevant pages
-3. Cite sources using [filename.md] format
-4. If the answer isn't in the wiki, reply: "I don't know - not in knowledge base"
+1. Use the INDEX above to identify which page(s) likely contain the answer
+2. Call read_wiki_page with the relative path to load full content
+3. Only call list_wiki_files if the INDEX doesn't cover the topic
+4. Cite sources using [filename.md] format
+5. If the answer isn't in the wiki, reply: "I don't know - not in knowledge base"
 ```
+
+Note the `=` prefix on the systemMessage in the JSON — that turns it into an n8n expression so `{{ $json.wikiIndex }}` resolves to the actual index content.
 
 Connected to:
 - **Anthropic Chat Model** (Claude Haiku 4.5) — the LLM
-- **Tool: List Files** — `list_wiki_files`
-- **Tool: Read Page** — `read_wiki_page`
+- **Tool: Read Page** — `read_wiki_page` (primary)
+- **Tool: List Files** — `list_wiki_files` (fallback)
 
 ### 4.4 Tool: List Files (toolCode)
 
@@ -184,15 +198,21 @@ To add new content:
 1. Drop a markdown file into the right folder
 2. Use clear headings (the agent uses them as cues)
 3. Cross-link with `[[other-file]]` — the agent picks up on these
-4. Commit and push to GitHub:
+4. **Add an entry to `index.html`** with a one-line description — this is what the agent reads to find your page:
+   ```markdown
+   - **[My New Concept](wiki/concepts/my-new-concept.md)** — One-line description of what this page covers
+   ```
+5. Commit and push to GitHub:
 
 ```bash
-git add wiki/concepts/my-new-page.md
+git add wiki/concepts/my-new-page.md index.html
 git commit -m "add my-new-page concept"
 git push
 ```
 
-The next webhook call will `git pull` automatically and have the new content available.
+The next webhook call will `git pull` automatically and have the new content available — *and* the index will tell the agent it exists.
+
+> **What if I forget to update `index.html`?** The agent falls back to `list_wiki_files`, which sees the new file by name. It just can't reason about its content as well without the description.
 
 ## Step 6 — Try Harder Questions
 
