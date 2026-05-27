@@ -1,131 +1,118 @@
-# n8n Automation Platform + LLM Wiki Workshop
+# LLM Wiki Agent (n8n + Claude)
 
-🚀 Run automation workflows locally with n8n - includes everything for the **LLM Wiki Chatbot Workshop**!
+A working chatbot that answers questions from a markdown knowledge base. Built on [n8n](https://n8n.io) with Claude Haiku 4.5.
 
-## What This Gives You
+Implements Karpathy's [LLM Wiki pattern](wiki/concepts/llm-wiki-pattern.md): **compile knowledge once, query forever**.
 
-- **n8n** (v2.16.1) - Automation platform with visual workflow builder
-- **Auto Setup** - Owner account + workflows automatically configured
-- **Sample Workflows** - Including wiki chatbot workflow
-- **Claude Skills** - Pre-built ingest & query skills for LLM wiki pattern
-- **Workshop Guide** - Complete step-by-step tutorial → See [WORKSHOP.md](WORKSHOP.md)
+## How It Works
 
-## 🎓 Workshop: Build Your Knowledge Chatbot
+```
+POST /webhook/wiki-agent
+   │
+   ▼
+┌──────────────────┐
+│ Sync Wiki Repo   │  git clone/pull from GitHub → /tmp/wiki-repo
+└──────────────────┘
+   │
+   ▼
+┌──────────────────┐     ┌─────────────────┐
+│   AI Agent       │ ──► │ list_wiki_files │
+│ (Claude Haiku)   │ ──► │ read_wiki_page  │
+└──────────────────┘     └─────────────────┘
+   │
+   ▼
+{ "answer": "...[concepts/llm-wiki-pattern.md]" }
+```
 
-Want to build a chatbot that answers from YOUR documents? 
+The agent fetches the latest wiki content from this public GitHub repo on every request, then uses two tools to list and read markdown files. It cites sources inline like `[concepts/llm-wiki-pattern.md]` and refuses to answer questions outside the knowledge base.
 
-**👉 Start here:** [WORKSHOP.md](WORKSHOP.md)
+## Prerequisites
 
-Learn Karpathy's "compile once, query forever" pattern and build a working chatbot in 2-3 hours.
+- Docker + Docker Compose
+- An [Anthropic API key](https://console.anthropic.com/)
 
 ## Quick Start
 
 ```bash
-# 1. Clone and setup
-git clone <your-repo>
-cd n8n-ollama
-cp .env.example .env
+git clone https://github.com/gabytal/n8n-llm-wiki-agent-workshop.git
+cd n8n-llm-wiki-agent-workshop
 
-# 2. Start everything
+# Set your API key
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+
+# Start everything
 docker compose up -d
 
-# 3. Wait for setup to complete (~2 minutes)
-# The system automatically creates your account and imports workflows
+# Wait for setup (~2 minutes), then watch for "✅ Setup complete!"
 docker compose logs -f n8n-init
-
-# 4. Access n8n once you see "✅ Setup complete!"
-open http://localhost:5678
 ```
 
-**Login Credentials:**
+Open http://localhost:5678 and log in:
 - Email: `admin@localhost.local`
 - Password: `Admin123`
 
-> ⏱️ **Important:** Wait at least 2 minutes after starting for the authentication process to complete. The system will automatically create your account and configure everything. You'll know it's ready when you see "✅ Setup complete!" in the logs.
+The `Wiki AI Agent (Git)` workflow is imported automatically. **Activate it** with the toggle in the top-right of the workflow editor.
 
-## Using n8n
+## Test It
 
-After the setup completes and you log in:
-
-1. Go to **Workflows** to see your imported workflows
-2. Create new workflows using the visual editor
-3. All workflows are automatically saved to your persistent volume
-
-## Configuration
-
-Edit `.env` file to customize:
-
-```env
-# n8n
-N8N_PORT=5678
-N8N_BASIC_AUTH_USER=admin@localhost.local
-N8N_BASIC_AUTH_PASSWORD=Admin123
+```bash
+curl -X POST http://localhost:5678/webhook/wiki-agent \
+  -H "Content-Type: application/json" \
+  -d '{"chatInput": "What is the LLM Wiki pattern?"}'
 ```
+
+Expected response:
+```json
+{
+  "answer": "The LLM Wiki pattern is... [concepts/llm-wiki-pattern.md]"
+}
+```
+
+Off-topic questions get refused:
+```bash
+curl -X POST http://localhost:5678/webhook/wiki-agent \
+  -H "Content-Type: application/json" \
+  -d '{"chatInput": "What is the capital of France?"}'
+# → "I don't know - not in knowledge base"
+```
+
+## Extend the Knowledge Base
+
+1. Add markdown files under `wiki/` (use the existing `concepts/`, `entities/`, `sources/`, `analysis/` structure)
+2. Commit and push to GitHub
+3. The next webhook call automatically pulls the latest content
+
+No re-deploy needed — the agent does `git pull` on every invocation.
+
+## Workshop
+
+Want to learn how this was built and replicate it from scratch? See **[WORKSHOP.md](WORKSHOP.md)**.
 
 ## Common Commands
 
 ```bash
-# Start
-docker compose up -d
-
-# Stop
-docker compose down
-
-# Reset everything (fresh start)
-docker compose down -v
-docker compose up -d
-
-# View logs
-docker compose logs -f n8n
-docker compose logs -f n8n-init
-
-# Check status
-docker compose ps
+docker compose up -d            # Start
+docker compose down             # Stop
+docker compose down -v          # Reset (wipe all data)
+docker compose logs -f n8n      # View n8n logs
+docker compose restart n8n      # Restart n8n
 ```
 
-## Troubleshooting
-
-**Can't login after starting:**
-- Wait at least 2 minutes for the auth setup to complete
-- Check setup logs: `docker compose logs -f n8n-init`
-- Look for "✅ Setup complete!" message
-
-**Workflows not appearing:**
-- Check import logs: `docker compose logs n8n-init`
-- Workflows are in the `/workflows` folder
-- Restart the init container: `docker compose restart n8n-init`
-
-**n8n not accessible:**
-- Verify n8n is running: `docker compose ps`
-- Check health status: `docker compose logs n8n`
-
-## Adding Your Own Workflows
-
-1. Create workflow in n8n UI
-2. Export as JSON
-3. Save to `workflows/` folder
-4. Restart: `docker compose restart n8n-init`
-
-## Architecture
+## Project Layout
 
 ```
-┌─────────────────────────────────┐
-│  Docker Containers              │
-│                                 │
-│  ┌──────────┐                   │
-│  │   n8n    │                   │
-│  │  :5678   │                   │
-│  └──────────┘                   │
-│       │                         │
-│  ┌──────────┐                   │
-│  │ n8n-init │                   │
-│  └──────────┘                   │
-└─────────────────────────────────┘
+.
+├── docker-compose.yml             # n8n + auto-setup
+├── workflows/
+│   └── wiki-agent-langchain.json  # The shipped workflow (auto-imported)
+├── wiki/                          # Knowledge base (markdown files)
+│   ├── concepts/
+│   ├── entities/
+│   ├── sources/
+│   └── analysis/
+└── WORKSHOP.md                    # Step-by-step build guide
 ```
-
-- **n8n**: Workflow automation platform
-- **n8n-init**: Auto-creates account + imports workflows
 
 ## License
 
-MIT - Free to use for learning and projects!
+MIT

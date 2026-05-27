@@ -12,149 +12,109 @@
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 300],
+      "position": [
+        240,
+        304
+      ],
       "webhookId": "wiki-agent-git"
     },
     {
       "parameters": {
-        "operation": "clone",
-        "repositoryUrl": "https://gitlab.tikalk.dev/tikalk/devops/ai/n8n-llm-wiki-agent-workshop.git",
-        "localPath": "/tmp/wiki-repo"
+        "jsCode": "const fs = require('fs');\nconst { execSync } = require('child_process');\n\nconst repoPath = '/tmp/wiki-repo';\nconst repoUrl = 'https://github.com/gabytal/n8n-llm-wiki-agent-workshop.git';\n\ntry {\n  if (fs.existsSync(repoPath + '/.git')) {\n    execSync(`cd ${repoPath} && git pull --ff-only`, { encoding: 'utf-8' });\n  } else {\n    execSync(`git clone ${repoUrl} ${repoPath}`, { encoding: 'utf-8' });\n  }\n  return [{ json: { ...$input.first().json, repoPath, status: 'ready' } }];\n} catch (err) {\n  return [{ json: { ...$input.first().json, repoPath, status: 'error', error: err.message } }];\n}"
       },
-      "id": "git-clone",
-      "name": "Clone Wiki Repo",
-      "type": "n8n-nodes-base.git",
-      "typeVersion": 1,
-      "position": [460, 300],
-      "continueOnFail": true
+      "id": "sync-repo",
+      "name": "Sync Wiki Repo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        304
+      ]
     },
     {
       "parameters": {
-        "conditions": {
-          "string": [
-            {
-              "value1": "={{ $json.error }}",
-              "operation": "contains",
-              "value2": "already exists"
-            }
-          ]
+        "promptType": "define",
+        "text": "={{ $json.body.chatInput }}",
+        "options": {
+          "systemMessage": "You are a knowledge base assistant for the LLM Wiki workshop. Answer questions ONLY using the wiki content provided through the tools. The wiki is structured into:\n- concepts/ : LLM Wiki pattern concepts\n- entities/ : people, tools, systems\n- sources/ : original articles and references\n- analysis/ : meta-analysis\n\nALWAYS:\n1. First call list_wiki_files to see what's available\n2. Then call read_wiki_page to load relevant pages\n3. Cite sources using [filename.md] format in your answer\n4. If the answer isn't in the wiki, reply: \"I don't know - not in knowledge base\""
         }
-      },
-      "id": "check-exists",
-      "name": "Repo Exists?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [680, 300]
-    },
-    {
-      "parameters": {
-        "operation": "pull",
-        "repositoryPath": "/tmp/wiki-repo"
-      },
-      "id": "git-pull",
-      "name": "Pull Updates",
-      "type": "n8n-nodes-base.git",
-      "typeVersion": 1,
-      "position": [900, 200]
-    },
-    {
-      "parameters": {
-        "options": {}
       },
       "id": "ai-agent",
       "name": "AI Agent",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.6,
-      "position": [1120, 300]
+      "position": [
+        688,
+        304
+      ]
     },
     {
       "parameters": {
         "model": {
           "__rl": true,
+          "value": "claude-haiku-4-5-20251001",
           "mode": "list",
-          "value": "claude-sonnet-4-20250514",
-          "cachedResultName": "Claude Sonnet 4"
+          "cachedResultName": "Claude Haiku 4.5"
         },
         "options": {}
       },
       "id": "claude-model",
       "name": "Anthropic Chat Model",
       "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
-      "typeVersion": 1.7,
-      "position": [1120, 480],
+      "typeVersion": 1.3,
+      "position": [
+        624,
+        512
+      ],
       "credentials": {
         "anthropicApi": {
           "id": "MlAfS2iaTQ1h70VI",
-          "name": "Anthropic API"
+          "name": "Anthropic account"
         }
       }
     },
     {
       "parameters": {
-        "name": "list_wiki_files",
-        "description": "List all available wiki markdown files with their sizes.",
-        "workflowId": "={{ $workflow.id }}"
+        "description": "List all available wiki markdown files with their relative paths and sizes. No input needed. Call this first to discover what content exists.",
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\ntry {\n  const wikiDir = '/tmp/wiki-repo/wiki';\n  const files = fs.readdirSync(wikiDir, { recursive: true });\n  const mdFiles = files.filter(f => typeof f === 'string' && f.endsWith('.md'));\n  const fileList = mdFiles.map(f => {\n    const fullPath = path.join(wikiDir, f);\n    const stats = fs.statSync(fullPath);\n    const sizeKb = (stats.size / 1024).toFixed(1);\n    return `- ${f} (${sizeKb}KB)`;\n  }).join('\\n');\n  return `Found ${mdFiles.length} wiki files:\\n${fileList}`;\n} catch (error) {\n  return `Error: ${error.message}`;\n}"
       },
       "id": "tool-list",
       "name": "Tool: List Files",
-      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
-      "typeVersion": 1.1,
-      "position": [900, 380]
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.3,
+      "position": [
+        832,
+        624
+      ]
     },
     {
       "parameters": {
-        "name": "read_wiki_page",
-        "description": "Read the full content of a specific wiki page by filename (e.g., 'concepts/llm-wiki-pattern.md').",
-        "workflowId": "={{ $workflow.id }}"
+        "description": "Read the full content of a specific wiki page by relative path. Input MUST be a JSON object with key 'filename' containing a path like 'concepts/llm-wiki-pattern.md' or 'entities/andrej-karpathy.md'.",
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst filename = (typeof query === 'string' ? query : (query && query.filename) || '').trim();\n\ntry {\n  if (!filename) return 'Error: filename is required';\n  const wikiDir = '/tmp/wiki-repo/wiki';\n  const candidates = [\n    path.join(wikiDir, filename),\n    path.join(wikiDir, filename.endsWith('.md') ? filename : filename + '.md')\n  ];\n  for (const p of candidates) {\n    if (fs.existsSync(p) && fs.statSync(p).isFile()) {\n      return `Content of ${filename}:\\n\\n` + fs.readFileSync(p, 'utf-8');\n    }\n  }\n  return `Error: File \"${filename}\" not found in wiki.`;\n} catch (error) {\n  return `Error: ${error.message}`;\n}"
       },
       "id": "tool-read",
       "name": "Tool: Read Page",
-      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
-      "typeVersion": 1.1,
-      "position": [900, 500]
-    },
-    {
-      "parameters": {
-        "sessionIdType": "customKey",
-        "sessionKey": "={{ $json.sessionId || 'default' }}",
-        "contextWindowLength": 5
-      },
-      "id": "memory",
-      "name": "Window Buffer Memory",
-      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
-      "typeVersion": 1.2,
-      "position": [1120, 640]
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.3,
+      "position": [
+        944,
+        624
+      ]
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { \"answer\": $json.output, \"session_id\": $json.sessionId } }}"
+        "responseBody": "={{ { \"answer\": $json.output } }}",
+        "options": {}
       },
       "id": "respond",
       "name": "Respond to Webhook",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1340, 300]
-    },
-    {
-      "parameters": {
-        "functionCode": "const fs = require('fs');\nconst path = require('path');\n\ntry {\n  const wikiDir = '/tmp/wiki-repo/wiki';\n  const files = fs.readdirSync(wikiDir, { recursive: true });\n  const mdFiles = files.filter(f => f.endsWith('.md'));\n  \n  const fileList = mdFiles.map(f => {\n    const fullPath = path.join(wikiDir, f);\n    const stats = fs.statSync(fullPath);\n    const sizeKb = (stats.size / 1024).toFixed(1);\n    return `- ${f} (${sizeKb}KB)`;\n  }).join('\\n');\n  \n  return [{ json: { result: `Found ${mdFiles.length} wiki files:\\n${fileList}` } }];\n} catch (error) {\n  return [{ json: { result: `Error: ${error.message}` } }];\n}"
-      },
-      "name": "Execute List",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [900, 620],
-      "id": "execute-list"
-    },
-    {
-      "parameters": {
-        "functionCode": "const fs = require('fs');\nconst path = require('path');\nconst filename = items[0].json.filename || '';\n\ntry {\n  const wikiDir = '/tmp/wiki-repo/wiki';\n  const possiblePaths = [\n    path.join(wikiDir, filename),\n    path.join(wikiDir, `${filename}.md`)\n  ];\n  \n  let content = null;\n  let foundPath = null;\n  \n  for (const tryPath of possiblePaths) {\n    if (fs.existsSync(tryPath)) {\n      content = fs.readFileSync(tryPath, 'utf-8');\n      foundPath = tryPath;\n      break;\n    }\n  }\n  \n  if (content === null) {\n    return [{ json: { result: `Error: File \"${filename}\" not found.` } }];\n  }\n  \n  return [{ json: { result: `Content of ${filename}:\\n\\n${content}` } }];\n} catch (error) {\n  return [{ json: { result: `Error: ${error.message}` } }];\n}"
-      },
-      "name": "Execute Read",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [900, 740],
-      "id": "execute-read"
+      "position": [
+        976,
+        304
+      ]
     }
   ],
   "connections": {
@@ -162,43 +122,14 @@
       "main": [
         [
           {
-            "node": "Clone Wiki Repo",
+            "node": "Sync Wiki Repo",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Clone Wiki Repo": {
-      "main": [
-        [
-          {
-            "node": "Repo Exists?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Repo Exists?": {
-      "main": [
-        [
-          {
-            "node": "Pull Updates",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "AI Agent",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Pull Updates": {
+    "Sync Wiki Repo": {
       "main": [
         [
           {
@@ -252,22 +183,10 @@
           }
         ]
       ]
-    },
-    "Window Buffer Memory": {
-      "ai_memory": [
-        [
-          {
-            "node": "AI Agent",
-            "type": "ai_memory",
-            "index": 0
-          }
-        ]
-      ]
     }
   },
   "settings": {
-    "executionOrder": "v1"
-  },
-  "staticData": null,
-  "tags": []
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
 }

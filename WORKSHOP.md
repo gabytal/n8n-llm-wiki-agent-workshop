@@ -1,391 +1,252 @@
-# 🧠 LLM Wiki Chatbot Workshop
+# Workshop: Build an LLM Wiki Agent
 
-Build a chatbot that answers questions using **your own knowledge base** with n8n and the LLM wiki pattern.
+Build a chatbot that answers questions from a markdown knowledge base, with citations, in ~90 minutes.
 
-## What You'll Build
+You'll learn:
+- Karpathy's "compile once, query forever" knowledge pattern
+- How to wire an n8n AI Agent to custom JS tools
+- How to ground LLM answers in your own docs (no hallucinations)
 
-```
-Your docs → Wiki structure → n8n workflow → Chatbot API
-   📄           🗂️              🔄            🤖
-```
+## What You're Building
 
-**Soon you'll have:**
-- A structured wiki built from your documents (Karpathy's pattern)
-- An n8n workflow that queries your wiki
-- A working chatbot API you can query
-
-## Quick Start
-
-### Prerequisites
-- Docker & Docker Compose installed
-- Anthropic API key ([get one here](https://console.anthropic.com/settings/keys))
-- Basic command line knowledge
-
-### Setup (5 minutes)
+A webhook that takes a question and returns a cited answer:
 
 ```bash
-# 1. Clone this repo
-git clone <your-repo>
-cd n8n-ollama
+curl -X POST http://localhost:5678/webhook/wiki-agent \
+  -d '{"chatInput": "What is the LLM Wiki pattern?"}'
+# → {"answer": "The LLM Wiki pattern is... [concepts/llm-wiki-pattern.md]"}
+```
 
-# 2. Add your API key
-cp .env.example .env
-# Edit .env and add: ANTHROPIC_API_KEY=your-key-here
+Behind the scenes:
 
-# 3. Start everything
+```
+Webhook → Sync Wiki Repo (git clone/pull) → AI Agent ⇄ Tools → Respond
+```
+
+The agent has two tools it can call:
+- `list_wiki_files` — see what's in the knowledge base
+- `read_wiki_page` — load a specific file's content
+
+## Prerequisites
+
+- Docker + Docker Compose
+- An [Anthropic API key](https://console.anthropic.com/)
+- Basic familiarity with JSON & HTTP
+
+## Step 1 — Spin Up n8n
+
+```bash
+git clone https://github.com/gabytal/n8n-llm-wiki-agent-workshop.git
+cd n8n-llm-wiki-agent-workshop
+
 docker compose up -d
-
-# 4. Wait for setup (~2 minutes)
 docker compose logs -f n8n-init
-# Wait for: "✅ Setup complete!"
-
-# 5. Open n8n
-open http://localhost:5678
-# Login: admin@localhost.local / Admin123
 ```
 
-## Workshop Steps
+Wait for `✅ Setup complete!` (~2 min). Open http://localhost:5678 and log in:
+- `admin@localhost.local` / `Admin123`
 
-### Step 1: Create Your Wiki Structure
+## Step 2 — Add Your Anthropic Credential
+
+The workflow ships referencing a credential by name; you need to create it once.
+
+1. **Settings → Credentials → New** → search "Anthropic"
+2. Paste your API key, save
+3. Open the **Wiki AI Agent (Git)** workflow → click the **Anthropic Chat Model** node → select your credential
+
+## Step 3 — Activate & Test
+
+Toggle the workflow **Active** (top-right). Then from your terminal:
 
 ```bash
-# Create the wiki folders
-mkdir -p my-wiki/{raw,wiki}
-cd my-wiki
-
-# Create category folders (you choose!)
-mkdir -p wiki/concepts wiki/entities wiki/sources
-
-# Or create your own categories:
-# mkdir -p wiki/products wiki/competitors wiki/research
-```
-
-**✅ Checkpoint:** You have `raw/` and `wiki/` folders with categories inside
-
----
-
-### Step 2: Add Your Source Documents
-
-Add 2-3 documents to `raw/`:
-
-```bash
-# Copy your documents
-cp ~/Documents/article1.md raw/
-cp ~/Documents/notes.md raw/
-cp ~/Documents/research.pdf raw/
-```
-
-**Pro tip:** Start small! 3 sources is perfect for learning.
-
-**✅ Checkpoint:** `raw/` folder has your content
-
----
-
-### Step 3: Create Ingestion Skill
-
-Create `.claude/skills/ingest.md`:
-
-```markdown
----
-name: ingest
-description: Compile raw sources into structured wiki pages
----
-
-# Ingest: Transform Raw Sources into Wiki
-
-Read files in raw/ folder
-List wiki/ subdirectories to discover available categories
-Extract key entities, concepts, and ideas from sources
-Classify content into appropriate categories
-Create markdown pages with cross-links using [[wikilinks]]
-Update wiki/index.md with new entries (title + one-line description)
-Append entry to wiki/log.md with timestamp and summary
-
-Example: `raw/ai-agents.pdf` creates:
-- `wiki/concepts/agentic-rag.md`
-- `wiki/entities/langchain.md`
-- Updates `wiki/index.md` and `wiki/log.md`
-```
-
-**✅ Checkpoint:** Skill file created
-
----
-
-### Step 4: Run Ingestion
-
-Use Claude Code to ingest your documents:
-
-```bash
-# In your wiki directory
-claude
-
-# Then in Claude:
-/ingest
-# Or: "Ingest the content in raw/"
-```
-
-Claude will:
-- Read your source files
-- Create wiki pages in the right categories
-- Add cross-links between related pages
-- Update index.md and log.md
-
-**✅ Checkpoint:** Wiki pages generated in `wiki/concepts/`, `wiki/entities/`, etc.
-
----
-
-### Step 5: Create Query Skill
-
-Create `.claude/skills/query.md`:
-
-```markdown
----
-name: query
-description: Search wiki and answer questions from your knowledge
----
-
-# Query: Search and Synthesize
-
-Search wiki/index.md for relevant page titles
-Read those specific pages from wiki/
-Synthesize answer combining multiple sources
-Cite sources using [[page-name]] format
-Return structured response with citations
-
-If answer not in wiki, say: "I don't know - not in knowledge base"
-```
-
-**Test it:**
-```bash
-# In Claude Code
-/query what did I learn about AI agents?
-```
-
-**✅ Checkpoint:** Query returns answers from YOUR wiki
-
----
-
-### Step 6: Build n8n Workflow
-
-In n8n (http://localhost:5678), create this workflow:
-
-**Nodes:**
-1. **Webhook** (Trigger)
-   - Method: POST
-   - Path: `wiki`
-   - Accept: `{ "query": "your question" }`
-
-2. **Read Files** (Read/Write Files from Disk)
-   - Operation: Read files from disk
-   - File Path: `/wiki/wiki/**/*.md`
-   - Binary Property: `data`
-
-3. **Convert to Text** (Code node)
-```javascript
-const items = $input.all();
-const wikiContent = items.map(item => {
-  const content = Buffer.from(item.binary.data.data, 'base64').toString('utf-8');
-  return `File: ${item.binary.data.fileName}\n${content}\n---\n`;
-}).join('\n');
-
-return [{ json: { wiki: wikiContent, query: $('Webhook').item.json.query }}];
-```
-
-4. **AI Agent** (HTTP Request to Claude)
-   - Method: POST
-   - URL: `https://api.anthropic.com/v1/messages`
-   - Headers:
-     - `x-api-key`: `{{ $env.ANTHROPIC_API_KEY }}`
-     - `anthropic-version`: `2023-06-01`
-     - `content-type`: `application/json`
-   - Body:
-```json
-{
-  "model": "claude-3-5-sonnet-20241022",
-  "max_tokens": 1024,
-  "system": "You are a knowledge base assistant. Answer questions ONLY using the wiki content provided. Cite sources using [filename.md]. If not in wiki, say 'I don't know'.",
-  "messages": [{
-    "role": "user",
-    "content": "Wiki:\n{{ $json.wiki }}\n\nQuestion: {{ $json.query }}"
-  }]
-}
-```
-
-5. **Format Response** (Code node)
-```javascript
-const response = $input.item.json.content[0].text;
-return [{ json: { answer: response, sources: "From wiki files" }}];
-```
-
-6. **Respond to Webhook**
-   - Response: `{{ $json }}`
-
-**✅ Checkpoint:** Workflow saves successfully
-
----
-
-### Step 7: Test Your Chatbot
-
-```bash
-curl -X POST http://localhost:5678/webhook/wiki \
+curl -X POST http://localhost:5678/webhook/wiki-agent \
   -H "Content-Type: application/json" \
-  -d '{
-    "query": "What did I learn about AI agents?"
-  }'
+  -d '{"chatInput": "Who is Vannevar Bush?"}'
 ```
 
-**Expected response:**
-```json
-{
-  "answer": "Based on your wiki, AI agents are...",
-  "sources": "From wiki files"
+You should get a grounded answer with a citation like `[entities/vannevar-bush.md]`.
+
+Now try an off-topic question:
+
+```bash
+curl -X POST http://localhost:5678/webhook/wiki-agent \
+  -d '{"chatInput": "What is the capital of France?"}'
+# → "I don't know - not in knowledge base"
+```
+
+That refusal is the whole point — the agent only answers from the wiki.
+
+## Step 4 — Walk the Workflow
+
+Open `Wiki AI Agent (Git)` in the n8n editor. Five nodes:
+
+### 4.1 Webhook
+- **Method:** POST
+- **Path:** `wiki-agent`
+- **Response Mode:** Response Node (so we can return JSON at the end)
+
+### 4.2 Sync Wiki Repo (Code node)
+
+Clones the public wiki repo on first call, pulls on subsequent calls:
+
+```javascript
+const fs = require('fs');
+const { execSync } = require('child_process');
+
+const repoPath = '/tmp/wiki-repo';
+const repoUrl = 'https://github.com/gabytal/n8n-llm-wiki-agent-workshop.git';
+
+if (fs.existsSync(repoPath + '/.git')) {
+  execSync(`cd ${repoPath} && git pull --ff-only`);
+} else {
+  execSync(`git clone ${repoUrl} ${repoPath}`);
 }
+return [{ json: { ...$input.first().json, repoPath, status: 'ready' } }];
 ```
 
-**✅ Done! Your knowledge chatbot is live!**
+> **Why a Code node?** It needs `child_process` for `git`. `docker-compose.yml` allows this via `NODE_FUNCTION_ALLOW_BUILTIN=fs,path,child_process`.
 
----
+### 4.3 AI Agent
 
-## Understanding the Pattern
-
-### Why This Works (Karpathy's Insight)
-
-**Traditional RAG:**
-- Query time: Embed query → Search vectors → Retrieve → Generate
-- Starts from scratch every time
-- No accumulated knowledge structure
-
-**LLM Wiki:**
-- Ingest time: Process sources → Create structured pages → Cross-link
-- **Compile once, query forever**
-- Knowledge accumulates like compiled code
-
-### The Three Operations
-
-1. **INGEST** - Compile raw sources into wiki (do this when adding new docs)
-2. **QUERY** - Search and synthesize from wiki (do this constantly)
-3. **LINT** - Audit and maintain wiki quality (do this periodically)
-
-### Folder Structure
+The brain. Its system prompt enforces the pattern:
 
 ```
-my-wiki/
-├── raw/                     # Your source documents (never edit!)
-│   ├── article1.md
-│   └── notes.pdf
-├── wiki/                    # LLM-maintained knowledge base
-│   ├── concepts/            # Big ideas
-│   │   └── agentic-rag.md
-│   ├── entities/            # Tools, people, organizations
-│   │   └── langchain.md
-│   ├── sources/             # Source metadata
-│   │   └── article1-summary.md
-│   ├── index.md             # Catalog of all pages
-│   └── log.md               # Change history
-└── .claude/
-    └── skills/
-        ├── ingest.md        # Compile sources
-        └── query.md         # Search wiki
+You are a knowledge base assistant for the LLM Wiki workshop.
+Answer questions ONLY using the wiki content provided through the tools.
+
+ALWAYS:
+1. First call list_wiki_files to see what's available
+2. Then call read_wiki_page to load relevant pages
+3. Cite sources using [filename.md] format
+4. If the answer isn't in the wiki, reply: "I don't know - not in knowledge base"
 ```
+
+Connected to:
+- **Anthropic Chat Model** (Claude Haiku 4.5) — the LLM
+- **Tool: List Files** — `list_wiki_files`
+- **Tool: Read Page** — `read_wiki_page`
+
+### 4.4 Tool: List Files (toolCode)
+
+```javascript
+const fs = require('fs');
+const path = require('path');
+const wikiDir = '/tmp/wiki-repo/wiki';
+const files = fs.readdirSync(wikiDir, { recursive: true });
+const mdFiles = files.filter(f => typeof f === 'string' && f.endsWith('.md'));
+const fileList = mdFiles.map(f => {
+  const stats = fs.statSync(path.join(wikiDir, f));
+  return `- ${f} (${(stats.size / 1024).toFixed(1)}KB)`;
+}).join('\n');
+return `Found ${mdFiles.length} wiki files:\n${fileList}`;
+```
+
+### 4.5 Tool: Read Page (toolCode)
+
+```javascript
+const fs = require('fs');
+const path = require('path');
+const filename = (typeof query === 'string' ? query : (query && query.filename) || '').trim();
+
+if (!filename) return 'Error: filename is required';
+const wikiDir = '/tmp/wiki-repo/wiki';
+const candidates = [
+  path.join(wikiDir, filename),
+  path.join(wikiDir, filename.endsWith('.md') ? filename : filename + '.md')
+];
+for (const p of candidates) {
+  if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+    return `Content of ${filename}:\n\n` + fs.readFileSync(p, 'utf-8');
+  }
+}
+return `Error: File "${filename}" not found in wiki.`;
+```
+
+> **Why `toolCode` and not `toolWorkflow`?** `toolCode` runs JS inline and binds directly to the agent. `toolWorkflow` requires a separate sub-workflow with a trigger — more moving parts.
+
+### 4.6 Respond to Webhook
+
+Returns `{ "answer": "<agent output>" }` as JSON.
+
+## Step 5 — Extend the Knowledge Base
+
+The wiki uses 4 folders, each with a purpose:
+
+| Folder       | Contains                              |
+|--------------|---------------------------------------|
+| `concepts/`  | Pattern definitions, mental models    |
+| `entities/`  | People, tools, products               |
+| `sources/`   | Original articles, dated references   |
+| `analysis/`  | Meta-commentary, evolution writeups   |
+
+To add new content:
+
+1. Drop a markdown file into the right folder
+2. Use clear headings (the agent uses them as cues)
+3. Cross-link with `[[other-file]]` — the agent picks up on these
+4. Commit and push to GitHub:
+
+```bash
+git add wiki/concepts/my-new-page.md
+git commit -m "add my-new-page concept"
+git push
+```
+
+The next webhook call will `git pull` automatically and have the new content available.
+
+## Step 6 — Try Harder Questions
+
+```bash
+# Multi-hop: agent must read multiple files
+curl -X POST http://localhost:5678/webhook/wiki-agent \
+  -d '{"chatInput": "How does the LLM Wiki pattern differ from RAG?"}'
+
+# Entity question
+curl -X POST http://localhost:5678/webhook/wiki-agent \
+  -d '{"chatInput": "What is Memex and who built it?"}'
+
+# Should refuse
+curl -X POST http://localhost:5678/webhook/wiki-agent \
+  -d '{"chatInput": "What is the weather in Tokyo?"}'
+```
+
+Watch the **Executions** tab in n8n while testing — you can see exactly which files the agent read for each answer.
+
+## The Pattern (Why This Works)
+
+Karpathy's insight: instead of stuffing every doc into a vector DB and hoping retrieval finds the right chunk, **compile** your knowledge into a clean, hierarchical wiki. Then let the LLM **navigate** it the way a person would — list files, read what looks relevant, cite sources.
+
+Compared to traditional RAG:
+
+| Aspect    | RAG (vectors)        | LLM Wiki                       |
+|-----------|----------------------|--------------------------------|
+| Storage   | Embeddings DB        | Markdown files in git          |
+| Retrieval | Similarity search    | LLM reads filenames + content  |
+| Updates   | Re-embed pipeline    | `git push`                     |
+| Citations | Chunk IDs            | Filenames                      |
+| Debug     | Hard                 | Read the file                  |
+
+For more, see [`wiki/concepts/llm-wiki-pattern.md`](wiki/concepts/llm-wiki-pattern.md) and [`wiki/concepts/rag-vs-llm-wiki.md`](wiki/concepts/rag-vs-llm-wiki.md).
 
 ## Troubleshooting
 
-### API Key Issues
-```bash
-# Test your API key
-curl https://api.anthropic.com/v1/messages \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
-  -H "anthropic-version: 2023-06-01" \
-  -H "content-type: application/json" \
-  -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":10,"messages":[{"role":"user","content":"test"}]}'
+**Webhook returns 404**
+- Workflow not active. Toggle the switch in the top-right of the editor.
 
-# Should return JSON with "content" field
-```
+**Agent says "I don't know" for everything**
+- Check the **Executions** tab — did `list_wiki_files` succeed? If it errored with `Cannot find module 'fs'`, your `NODE_FUNCTION_ALLOW_BUILTIN` env var didn't propagate. Restart: `docker compose restart n8n`.
 
-### n8n Can't Read Files
-```bash
-# Check file permissions
-ls -la my-wiki/wiki/
+**Anthropic Chat Model node shows as "not installed"**
+- Wrong typeVersion. Should be `1.3` for `lmChatAnthropic`.
 
-# Fix permissions
-chmod -R 755 my-wiki/wiki/
+**Sync Wiki Repo fails with "could not read Username"**
+- Repo URL is wrong (private repo). The shipped workflow uses the public GitHub URL.
 
-# Mount wiki folder in docker-compose.yml
-volumes:
-  - ./my-wiki/wiki:/wiki:ro
-```
+## What's Next
 
-### Workflow Fails
-1. Click the failing node
-2. Click "Execute Node" (not "Execute Workflow")
-3. Read the error in the output panel
-4. Common issues:
-   - Missing API key in environment
-   - Wrong file paths (use `/wiki/` not `./wiki/`)
-   - Binary data not converted to text
+- **Add a chat UI**: build a simple HTML page that POSTs to the webhook
+- **Swap the model**: try Sonnet 4.5 for harder questions, or local Ollama for privacy
+- **Multi-repo**: clone several knowledge bases and let the agent search across them
+- **Embed-on-write lint**: add a workflow that validates new wiki pages on PR
 
-### Wiki Too Large (Context Overflow)
-```bash
-# Check wiki size
-ls wiki/**/*.md | wc -l   # Number of pages
-wc -c wiki/index.md       # Index size
-
-# If >50 pages, load selectively:
-# 1. Search index.md for relevant pages
-# 2. Load only those 3-5 pages
-# 3. Pass to AI agent
-```
-
-## Next Steps
-
-After completing the workshop:
-
-### 1. Add Obsidian for Visualization
-```bash
-# Open wiki/ in Obsidian
-# See graph view of your knowledge
-# Use web clipper to add new sources
-```
-
-### 2. Scale with qmd
-```bash
-npm install -g qmd
-cd my-wiki/wiki
-qmd init
-# Now: qmd search "query" finds pages fast
-```
-
-### 3. Connect to Slack/Discord
-- Use n8n's Slack/Discord nodes
-- Trigger workflow from messages
-- Bot answers from YOUR knowledge
-
-### 4. Add More Categories
-```bash
-mkdir wiki/comparisons  # Side-by-side analysis
-mkdir wiki/guides       # Step-by-step procedures
-# Ingest skill adapts automatically!
-```
-
-### 5. Automate Ingestion
-- Watch `raw/` folder for new files
-- Auto-trigger ingestion on file add
-- Get email summaries of new knowledge
-
-## Resources
-
-- [Karpathy's LLM Wiki Pattern](https://twitter.com/karpathy) - Original explanation
-- [n8n Documentation](https://docs.n8n.io/) - Workflow automation
-- [Claude API Docs](https://docs.anthropic.com/) - API reference
-- [Obsidian](https://obsidian.md/) - Wiki visualization
-
-## Philosophy
-
-> **"What if knowledge compounded like code?"**
-> 
-> RAG systems re-process everything at query time. LLM wikis compile once and query forever. Your wiki gets smarter with every source you add, and past knowledge enriches future understanding.
-
----
-
-**Built with:** n8n + Claude + Karpathy's LLM Wiki Pattern
-**License:** MIT - Free to use and modify
+Have fun.
