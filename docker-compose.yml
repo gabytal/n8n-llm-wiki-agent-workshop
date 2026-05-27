@@ -1,0 +1,95 @@
+services:
+  n8n:
+    image: n8nio/n8n:2.16.1
+    container_name: n8n
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - NODE_FUNCTION_ALLOW_BUILTIN=fs,path,child_process
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ${WIKI_PATH:-./wiki}:/data/wiki:ro
+    networks:
+      - n8n-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  n8n-init:
+    image: n8nio/n8n:2.16.1
+    container_name: n8n-init
+    environment:
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin@localhost.local}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-Admin123}
+      - N8N_PORT=${N8N_PORT:-5678}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "🚀 Starting n8n setup..."
+        N8N_USER=$$N8N_BASIC_AUTH_USER
+        N8N_PASS=$$N8N_BASIC_AUTH_PASSWORD
+
+        echo "⏳ Waiting for n8n to be ready..."
+        until wget -q -O /dev/null http://n8n:5678/healthz 2>/dev/null; do
+          sleep 2
+        done
+        echo "✅ n8n is ready!"
+
+        # Step 1: Setup owner account
+        echo ""
+        echo "👤 Setting up n8n owner account..."
+        sleep 5
+
+        OWNER_PAYLOAD="{\"email\":\"$$N8N_USER\",\"password\":\"$$N8N_PASS\",\"firstName\":\"Admin\",\"lastName\":\"User\"}"
+        OWNER_RESULT=$$(wget -q -O- --header='Content-Type: application/json' \
+          --post-data="$$OWNER_PAYLOAD" \
+          http://n8n:5678/rest/owner/setup 2>/dev/null || echo '{}')
+
+        if echo "$$OWNER_RESULT" | grep -q '"id"'; then
+          echo "✅ Owner account created successfully"
+        elif echo "$$OWNER_RESULT" | grep -q '"message"'; then
+          ERROR_MSG=$$(echo "$$OWNER_RESULT" | grep -o '"message":"[^"]*"' | cut -d'"' -f4)
+          echo "ℹ️  $$ERROR_MSG"
+        fi
+
+        # Step 2: Import workflows using n8n CLI
+        echo ""
+        echo "📦 Importing workflows..."
+
+        if [ -d "/workflows" ] && [ "$$(ls -A /workflows/*.json 2>/dev/null)" ]; then
+          n8n import:workflow --input=/workflows --separate 2>/dev/null && \
+            echo "✅ Workflows imported successfully" || \
+            echo "ℹ️  Workflows may already exist"
+        else
+          echo "ℹ️  No workflows found"
+        fi
+
+        echo ""
+        echo "✅ Setup complete!"
+        echo ""
+        echo "📝 Access n8n at: http://localhost:$$N8N_PORT"
+        echo "   Username: $$N8N_USER"
+        echo "   Password: $$N8N_PASS"
+        echo ""
+    depends_on:
+      n8n:
+        condition: service_healthy
+    networks:
+      - n8n-network
+
+volumes:
+  n8n_data:
+
+networks:
+  n8n-network:
+    driver: bridge

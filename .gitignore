@@ -1,0 +1,12 @@
+# Environment
+.env
+
+# n8n data (local)
+.n8n/
+
+# Mac
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

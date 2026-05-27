@@ -1,0 +1,273 @@
+{
+  "name": "Wiki AI Agent (Git)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wiki-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "wiki-agent-git"
+    },
+    {
+      "parameters": {
+        "operation": "clone",
+        "repositoryUrl": "https://gitlab.tikalk.dev/tikalk/devops/ai/n8n-llm-wiki-agent-workshop.git",
+        "localPath": "/tmp/wiki-repo"
+      },
+      "id": "git-clone",
+      "name": "Clone Wiki Repo",
+      "type": "n8n-nodes-base.git",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.error }}",
+              "operation": "contains",
+              "value2": "already exists"
+            }
+          ]
+        }
+      },
+      "id": "check-exists",
+      "name": "Repo Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "pull",
+        "repositoryPath": "/tmp/wiki-repo"
+      },
+      "id": "git-pull",
+      "name": "Pull Updates",
+      "type": "n8n-nodes-base.git",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "ai-agent",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.6,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-20250514",
+          "cachedResultName": "Claude Sonnet 4"
+        },
+        "options": {}
+      },
+      "id": "claude-model",
+      "name": "Anthropic Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.7,
+      "position": [1120, 480],
+      "credentials": {
+        "anthropicApi": {
+          "id": "MlAfS2iaTQ1h70VI",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "name": "list_wiki_files",
+        "description": "List all available wiki markdown files with their sizes.",
+        "workflowId": "={{ $workflow.id }}"
+      },
+      "id": "tool-list",
+      "name": "Tool: List Files",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 1.1,
+      "position": [900, 380]
+    },
+    {
+      "parameters": {
+        "name": "read_wiki_page",
+        "description": "Read the full content of a specific wiki page by filename (e.g., 'concepts/llm-wiki-pattern.md').",
+        "workflowId": "={{ $workflow.id }}"
+      },
+      "id": "tool-read",
+      "name": "Tool: Read Page",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 1.1,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.sessionId || 'default' }}",
+        "contextWindowLength": 5
+      },
+      "id": "memory",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.2,
+      "position": [1120, 640]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"answer\": $json.output, \"session_id\": $json.sessionId } }}"
+      },
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const fs = require('fs');\nconst path = require('path');\n\ntry {\n  const wikiDir = '/tmp/wiki-repo/wiki';\n  const files = fs.readdirSync(wikiDir, { recursive: true });\n  const mdFiles = files.filter(f => f.endsWith('.md'));\n  \n  const fileList = mdFiles.map(f => {\n    const fullPath = path.join(wikiDir, f);\n    const stats = fs.statSync(fullPath);\n    const sizeKb = (stats.size / 1024).toFixed(1);\n    return `- ${f} (${sizeKb}KB)`;\n  }).join('\\n');\n  \n  return [{ json: { result: `Found ${mdFiles.length} wiki files:\\n${fileList}` } }];\n} catch (error) {\n  return [{ json: { result: `Error: ${error.message}` } }];\n}"
+      },
+      "name": "Execute List",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 620],
+      "id": "execute-list"
+    },
+    {
+      "parameters": {
+        "functionCode": "const fs = require('fs');\nconst path = require('path');\nconst filename = items[0].json.filename || '';\n\ntry {\n  const wikiDir = '/tmp/wiki-repo/wiki';\n  const possiblePaths = [\n    path.join(wikiDir, filename),\n    path.join(wikiDir, `${filename}.md`)\n  ];\n  \n  let content = null;\n  let foundPath = null;\n  \n  for (const tryPath of possiblePaths) {\n    if (fs.existsSync(tryPath)) {\n      content = fs.readFileSync(tryPath, 'utf-8');\n      foundPath = tryPath;\n      break;\n    }\n  }\n  \n  if (content === null) {\n    return [{ json: { result: `Error: File \"${filename}\" not found.` } }];\n  }\n  \n  return [{ json: { result: `Content of ${filename}:\\n\\n${content}` } }];\n} catch (error) {\n  return [{ json: { result: `Error: ${error.message}` } }];\n}"
+      },
+      "name": "Execute Read",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 740],
+      "id": "execute-read"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Clone Wiki Repo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clone Wiki Repo": {
+      "main": [
+        [
+          {
+            "node": "Repo Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Repo Exists?": {
+      "main": [
+        [
+          {
+            "node": "Pull Updates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pull Updates": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: List Files": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: Read Page": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window Buffer Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}
