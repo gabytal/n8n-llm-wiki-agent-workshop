@@ -9,7 +9,8 @@ services:
       - N8N_PORT=5678
       - N8N_PROTOCOL=http
       - WEBHOOK_URL=http://localhost:5678
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # No LLM API key needed here — configure your provider credential
+      # (Anthropic, OpenAI, Ollama, etc.) in the n8n UI after startup.
       - NODE_FUNCTION_ALLOW_BUILTIN=fs,path,child_process
     volumes:
       - n8n_data:/home/node/.n8n

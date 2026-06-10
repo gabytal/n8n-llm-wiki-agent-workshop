@@ -1,272 +1,376 @@
 # Workshop: Build an LLM Wiki Agent
 
-Build a chatbot that answers questions from a markdown knowledge base, with citations, in ~90 minutes.
+Build a chatbot that answers questions from YOUR knowledge base - with citations, grounded answers, and zero hallucinations.
 
-You'll learn:
-- Karpathy's "compile once, query forever" knowledge pattern
-- How to wire an n8n AI Agent to custom JS tools
-- How to ground LLM answers in your own docs (no hallucinations)
+**Time:** 60 minutes
+**Pattern:** Karpathy's "compile once, query forever"
+
+## The Complete Flow
+
+```
+📄 Raw docs → 🤖 Claude Code ingest → 📚 Wiki → 📤 Git push → 🔄 n8n sync → 💬 Chatbot
+```
 
 ## What You're Building
 
-A webhook that takes a question and returns a cited answer:
-
-```bash
-curl -X POST http://localhost:5678/webhook/wiki-agent \
-  -d '{"chatInput": "What is the LLM Wiki pattern?"}'
-# → {"answer": "The LLM Wiki pattern is... [concepts/llm-wiki-pattern.md]"}
-```
-
-Behind the scenes:
-
-```
-Webhook → Sync Wiki Repo (git clone/pull + load index.html) → AI Agent ⇄ Tools → Respond
-```
-
-The agent gets a **curated index** (with one-line descriptions of every page) injected into its system prompt, plus two tools it can call:
-- `read_wiki_page` — load a specific file's content
-- `list_wiki_files` — fallback file listing if the index misses something
-
-> **Why both an index and a list tool?** The index (`index.html`) is hand-curated — it tells the LLM what each page is *about*, not just its filename. That lets the model pick the right page in one shot instead of trial-reading several. The `list_wiki_files` tool is a safety net for content not yet in the index.
+1. **Local knowledge compilation** - Claude Code reads your docs and creates a structured wiki
+2. **Git-based storage** - Wiki lives in GitHub (or any git repo)
+3. **n8n chatbot** - Queries the wiki via webhook, returns cited answers
 
 ## Prerequisites
 
 - Docker + Docker Compose
-- An [Anthropic API key](https://console.anthropic.com/)
-- Basic familiarity with JSON & HTTP
+- [Claude Code](https://claude.ai/code) installed
+- An account with any LLM provider supported by n8n (Anthropic, OpenAI, Google Gemini, Ollama, etc.) — you configure the credential in the n8n UI, no API key is needed at startup
+- Basic familiarity with git and terminal
 
-## Step 1 — Spin Up n8n
+---
+
+## Part 1: See It Working (10 min)
+
+### 1.1 Clone & Start
 
 ```bash
-git clone https://github.com/gabytal/n8n-llm-wiki-agent-workshop.git
+git clone https://github.com/gabytal/n8n-llm-wiki-agent-workshop
 cd n8n-llm-wiki-agent-workshop
-
 docker compose up -d
-docker compose logs -f n8n-init
 ```
 
-Wait for `✅ Setup complete!` (~2 min). Open http://localhost:5678 and log in:
-- `admin@localhost.local` / `Admin123`
+Wait ~2 minutes for setup. Watch for: `✅ Setup complete!`
 
-## Step 2 — Add Your Anthropic Credential
+### 1.2 Configure n8n
 
-The workflow ships referencing a credential by name; you need to create it once.
+1. Open http://localhost:5678
+2. Login: `admin@localhost.local` / `Admin123`
+3. Open workflow **Wiki AI Agent (Git)**
+4. Click the **chat model** node (ships as an Anthropic node by default) and set up your LLM provider:
+   - **Anthropic:** create/select an **Anthropic** credential, then pick a model (e.g. `Claude Haiku 4.5`)
+   - **Another provider:** delete the node, add the chat model node for your provider (*OpenAI Chat Model*, *Ollama Chat Model*, *Google Gemini Chat Model*, …), connect its **ai_languageModel** output to the **AI Agent** node, add your credential, and select a model
+5. **Activate** the workflow (toggle in top-right)
 
-1. **Settings → Credentials → New** → search "Anthropic"
-2. Paste your API key, save
-3. Open the **Wiki AI Agent (Git)** workflow → click the **Anthropic Chat Model** node → select your credential
-
-## Step 3 — Activate & Test
-
-Toggle the workflow **Active** (top-right). Then from your terminal:
+### 1.3 Test the Demo Bot
 
 ```bash
 curl -X POST http://localhost:5678/webhook/wiki-agent \
   -H "Content-Type: application/json" \
-  -d '{"chatInput": "Who is Vannevar Bush?"}'
+  -d '{"chatInput": "What is the LLM Wiki pattern?"}'
 ```
 
-You should get a grounded answer with a citation like `[entities/vannevar-bush.md]`.
-
-Now try an off-topic question:
-
-```bash
-curl -X POST http://localhost:5678/webhook/wiki-agent \
-  -d '{"chatInput": "What is the capital of France?"}'
-# → "I don't know - not in knowledge base"
-```
-
-That refusal is the whole point — the agent only answers from the wiki.
-
-## Step 4 — Walk the Workflow
-
-Open `Wiki AI Agent (Git)` in the n8n editor. Five nodes:
-
-### 4.1 Webhook
-- **Method:** POST
-- **Path:** `wiki-agent`
-- **Response Mode:** Response Node (so we can return JSON at the end)
-
-### 4.2 Sync Wiki Repo (Code node)
-
-Clones the public wiki repo on first call, pulls on subsequent calls, then loads `index.html` (the curated TOC) so we can inject it into the agent's system prompt:
-
-```javascript
-const fs = require('fs');
-const path = require('path');
-const { execSync } = require('child_process');
-
-const repoPath = '/tmp/wiki-repo';
-const repoUrl = 'https://github.com/gabytal/n8n-llm-wiki-agent-workshop.git';
-
-if (fs.existsSync(repoPath + '/.git')) {
-  execSync(`cd ${repoPath} && git pull --ff-only`);
-} else {
-  execSync(`git clone ${repoUrl} ${repoPath}`);
+**Expected:** Cited answer like:
+```json
+{
+  "answer": "The LLM Wiki pattern is knowledge management using markdown files... [concepts/llm-wiki-pattern.md]"
 }
-const indexPath = path.join(repoPath, 'index.html');
-const wikiIndex = fs.existsSync(indexPath) ? fs.readFileSync(indexPath, 'utf-8') : '';
-return [{ json: { ...$input.first().json, repoPath, wikiIndex, status: 'ready' } }];
 ```
 
-> **Why a Code node?** It needs `child_process` for `git`. `docker-compose.yml` allows this via `NODE_FUNCTION_ALLOW_BUILTIN=fs,path,child_process`.
-
-> **Why load `index.html` here?** We want the agent to know what's in the wiki *before* it thinks about which tool to call. Injecting the index into the system prompt lets the model jump straight to `read_wiki_page('concepts/llm-wiki-pattern.md')` instead of round-tripping through `list_wiki_files` first.
-
-### 4.3 AI Agent
-
-The brain. Its system prompt embeds the wiki index from the Sync node and enforces the pattern:
-
-```
-You are a knowledge base assistant for the LLM Wiki workshop.
-Answer questions ONLY using the wiki content provided through the tools.
-
---- WIKI INDEX ---
-{{ $json.wikiIndex }}    ← injected at runtime from index.html
---- END INDEX ---
-
-ALWAYS:
-1. Use the INDEX above to identify which page(s) likely contain the answer
-2. Call read_wiki_page with the relative path to load full content
-3. Only call list_wiki_files if the INDEX doesn't cover the topic
-4. Cite sources using [filename.md] format
-5. If the answer isn't in the wiki, reply: "I don't know - not in knowledge base"
-```
-
-Note the `=` prefix on the systemMessage in the JSON — that turns it into an n8n expression so `{{ $json.wikiIndex }}` resolves to the actual index content.
-
-Connected to:
-- **Anthropic Chat Model** (Claude Haiku 4.5) — the LLM
-- **Tool: Read Page** — `read_wiki_page` (primary)
-- **Tool: List Files** — `list_wiki_files` (fallback)
-
-### 4.4 Tool: List Files (toolCode)
-
-```javascript
-const fs = require('fs');
-const path = require('path');
-const wikiDir = '/tmp/wiki-repo/wiki';
-const files = fs.readdirSync(wikiDir, { recursive: true });
-const mdFiles = files.filter(f => typeof f === 'string' && f.endsWith('.md'));
-const fileList = mdFiles.map(f => {
-  const stats = fs.statSync(path.join(wikiDir, f));
-  return `- ${f} (${(stats.size / 1024).toFixed(1)}KB)`;
-}).join('\n');
-return `Found ${mdFiles.length} wiki files:\n${fileList}`;
-```
-
-### 4.5 Tool: Read Page (toolCode)
-
-```javascript
-const fs = require('fs');
-const path = require('path');
-const filename = (typeof query === 'string' ? query : (query && query.filename) || '').trim();
-
-if (!filename) return 'Error: filename is required';
-const wikiDir = '/tmp/wiki-repo/wiki';
-const candidates = [
-  path.join(wikiDir, filename),
-  path.join(wikiDir, filename.endsWith('.md') ? filename : filename + '.md')
-];
-for (const p of candidates) {
-  if (fs.existsSync(p) && fs.statSync(p).isFile()) {
-    return `Content of ${filename}:\n\n` + fs.readFileSync(p, 'utf-8');
-  }
-}
-return `Error: File "${filename}" not found in wiki.`;
-```
-
-> **Why `toolCode` and not `toolWorkflow`?** `toolCode` runs JS inline and binds directly to the agent. `toolWorkflow` requires a separate sub-workflow with a trigger — more moving parts.
-
-### 4.6 Respond to Webhook
-
-Returns `{ "answer": "<agent output>" }` as JSON.
-
-## Step 5 — Extend the Knowledge Base
-
-The wiki uses 4 folders, each with a purpose:
-
-| Folder       | Contains                              |
-|--------------|---------------------------------------|
-| `concepts/`  | Pattern definitions, mental models    |
-| `entities/`  | People, tools, products               |
-| `sources/`   | Original articles, dated references   |
-| `analysis/`  | Meta-commentary, evolution writeups   |
-
-To add new content:
-
-1. Drop a markdown file into the right folder
-2. Use clear headings (the agent uses them as cues)
-3. Cross-link with `[[other-file]]` — the agent picks up on these
-4. **Add an entry to `index.html`** with a one-line description — this is what the agent reads to find your page:
-   ```markdown
-   - **[My New Concept](wiki/concepts/my-new-concept.md)** — One-line description of what this page covers
-   ```
-5. Commit and push to GitHub:
-
+**Try an off-topic question:**
 ```bash
-git add wiki/concepts/my-new-page.md index.html
-git commit -m "add my-new-page concept"
-git push
-```
-
-The next webhook call will `git pull` automatically and have the new content available — *and* the index will tell the agent it exists.
-
-> **What if I forget to update `index.html`?** The agent falls back to `list_wiki_files`, which sees the new file by name. It just can't reason about its content as well without the description.
-
-## Step 6 — Try Harder Questions
-
-```bash
-# Multi-hop: agent must read multiple files
-curl -X POST http://localhost:5678/webhook/wiki-agent \
-  -d '{"chatInput": "How does the LLM Wiki pattern differ from RAG?"}'
-
-# Entity question
-curl -X POST http://localhost:5678/webhook/wiki-agent \
-  -d '{"chatInput": "What is Memex and who built it?"}'
-
-# Should refuse
 curl -X POST http://localhost:5678/webhook/wiki-agent \
   -d '{"chatInput": "What is the weather in Tokyo?"}'
 ```
 
-Watch the **Executions** tab in n8n while testing — you can see exactly which files the agent read for each answer.
+**Expected:** `"I don't know - not in knowledge base"`
 
-## The Pattern (Why This Works)
+---
 
-Karpathy's insight: instead of stuffing every doc into a vector DB and hoping retrieval finds the right chunk, **compile** your knowledge into a clean, hierarchical wiki. Then let the LLM **navigate** it the way a person would — list files, read what looks relevant, cite sources.
+## Part 2: Ingest YOUR Knowledge (35 min)
 
-Compared to traditional RAG:
+Now use Claude Code to compile YOUR documents into wiki pages.
 
-| Aspect    | RAG (vectors)        | LLM Wiki                       |
-|-----------|----------------------|--------------------------------|
-| Storage   | Embeddings DB        | Markdown files in git          |
-| Retrieval | Similarity search    | LLM reads filenames + content  |
-| Updates   | Re-embed pipeline    | `git push`                     |
-| Citations | Chunk IDs            | Filenames                      |
-| Debug     | Hard                 | Read the file                  |
+### 2.1 Add Raw Sources
 
-For more, see [`wiki/concepts/llm-wiki-pattern.md`](wiki/concepts/llm-wiki-pattern.md) and [`wiki/concepts/rag-vs-llm-wiki.md`](wiki/concepts/rag-vs-llm-wiki.md).
+Create a `raw/` folder and add your documents:
+
+```bash
+mkdir raw
+cp ~/your-article.md raw/
+cp ~/your-notes.txt raw/
+cp ~/your-doc.pdf raw/
+```
+
+**Tip:** Start with 2-3 documents to see the pattern. Any format works (markdown, PDF, text, code).
+
+### 2.2 Run Ingestion Skill
+
+Open Claude Code in this directory and run the ingestion:
+
+```bash
+# In Claude Code terminal
+/ingest
+```
+
+**What happens:**
+- Claude reads all files in `raw/`
+- Extracts entities (people, tools, products)
+- Extracts concepts (ideas, methods, patterns)
+- Creates structured wiki pages with cross-links
+- **Automatically updates `index.html`** with new pages and descriptions
+- Logs changes to `wiki/log.md`
+
+**Folder structure after ingestion:**
+```
+wiki/
+├── concepts/        # Ideas, methods, patterns
+├── entities/        # People, tools, organizations
+├── sources/         # Source summaries (dated)
+├── analysis/        # Meta-analysis (optional)
+└── index.md         # Page catalog (auto-updated by skill)
+```
+
+### 2.3 Review Generated Pages
+
+Check what was created:
+
+```bash
+git status
+git diff wiki/
+```
+
+**Example output:**
+```
+wiki/concepts/your-concept.md (created)
+wiki/entities/your-tool.md (created)
+wiki/sources/2026-05-31-your-article.md (created)
+index.html (updated - new entries added automatically!)
+```
+
+**Important:** The ingestion skill automatically updates `index.html` with:
+- New page entries
+- One-line descriptions
+- Updated page counts
+
+Review the changes to make sure descriptions are clear.
+
+### 2.4 Commit & Push
+
+```bash
+git add wiki/ index.html raw/
+git commit -m "Ingest: [your domain] knowledge"
+git push
+```
+
+**Note:** `index.html` was auto-updated by the ingestion skill!
+
+---
+
+## Part 3: Query Your Knowledge (10 min)
+
+### 3.1 Test Your New Content
+
+```bash
+curl -X POST http://localhost:5678/webhook/wiki-agent \
+  -H "Content-Type: application/json" \
+  -d '{"chatInput": "What did I learn about [your topic]?"}'
+```
+
+**Check:**
+- Answer includes your content
+- Citations point to your wiki pages: `[concepts/your-concept.md]`
+- n8n Executions tab shows which files were read
+
+### 3.2 Try Complex Queries
+
+**Multi-page synthesis:**
+```bash
+curl -X POST http://localhost:5678/webhook/wiki-agent \
+  -d '{"chatInput": "How does [concept A] relate to [concept B]?"}'
+```
+
+**Entity lookup:**
+```bash
+curl -X POST http://localhost:5678/webhook/wiki-agent \
+  -d '{"chatInput": "What is [your tool] and when should I use it?"}'
+```
+
+**Should refuse:**
+```bash
+curl -X POST http://localhost:5678/webhook/wiki-agent \
+  -d '{"chatInput": "What is machine learning?"}'
+# → "I don't know - not in knowledge base" (unless you ingested ML content)
+```
+
+---
+
+## How It Works
+
+### Architecture
+
+```
+Webhook → Sync Repo (git pull) → AI Agent ⇄ Tools → Respond
+```
+
+### 5 n8n Nodes
+
+1. **Webhook** - Entry point (`POST /webhook/wiki-agent`)
+2. **Sync Wiki Repo** - Clones/pulls from GitHub, loads `index.html`
+3. **AI Agent** - Claude Haiku 4.5 with strict system prompt
+4. **Tool: list_wiki_files** - Fallback file listing
+5. **Tool: read_wiki_page** - Reads specific page content
+6. **Respond** - Returns JSON with cited answer
+
+### The Index Strategy
+
+Instead of blindly calling `list_wiki_files` and guessing from filenames, the agent gets `index.html` injected into its system prompt:
+
+```
+--- WIKI INDEX ---
+## Concepts
+- [LLM Wiki Pattern](wiki/concepts/llm-wiki-pattern.md) — Compile once, query forever
+- [RAG vs LLM Wiki](wiki/concepts/rag-vs-llm-wiki.md) — Query-time vs ingestion-time processing
+...
+--- END INDEX ---
+```
+
+Now the agent can jump straight to the right file in one shot.
+
+### The Ingestion Pattern
+
+**Local (Claude Code):**
+- Reads `raw/` sources
+- Classifies content (concept, entity, source)
+- Generates wiki pages with cross-links
+- Updates `wiki/index.md`
+
+**Remote (n8n):**
+- Pulls latest wiki from GitHub
+- Reads `index.html` for page descriptions
+- Uses `read_wiki_page` tool to load content
+- Refuses to answer outside the knowledge base
+
+---
+
+## Claude Code Skills
+
+The repo includes two skills in `.claude/skills/`:
+
+### ingest.md
+**Purpose:** Transform raw sources into structured wiki pages
+
+**Usage:**
+```bash
+/ingest                           # Process all files in raw/
+/ingest raw/article.md            # Process one file
+/ingest raw/docs/ focus:concepts  # Targeted ingestion
+```
+
+**Creates:**
+- Entity pages: `wiki/entities/tool-name.md`
+- Concept pages: `wiki/concepts/idea-name.md`
+- Source summaries: `wiki/sources/YYYY-MM-DD-source-name.md`
+- Cross-links with `[[wikilinks]]`
+- **Automatically updates `index.html`** with new entries and descriptions
+
+### query.md
+**Purpose:** Search and answer from your compiled wiki (for local use)
+
+**Usage:**
+```bash
+/query what are the main concepts about X?
+/query how does A differ from B?
+/query what did I learn about [topic]?
+```
+
+**Returns:** Cited answer with `[[wikilinks]]` and source references
+
+---
+
+## Extending the Knowledge Base
+
+### Add More Content
+
+1. Drop new files into `raw/`
+2. Run `/ingest` in Claude Code
+3. Update `index.html` with new page descriptions
+4. Commit and push
+5. Next webhook call auto-pulls the update
+
+### No re-deploy needed - the agent does `git pull` on every request.
+
+---
 
 ## Troubleshooting
 
 **Webhook returns 404**
-- Workflow not active. Toggle the switch in the top-right of the editor.
+- Workflow not active → Toggle the switch in workflow editor
 
 **Agent says "I don't know" for everything**
-- Check the **Executions** tab — did `list_wiki_files` succeed? If it errored with `Cannot find module 'fs'`, your `NODE_FUNCTION_ALLOW_BUILTIN` env var didn't propagate. Restart: `docker compose restart n8n`.
+- Check n8n Executions tab for errors
+- Verify `index.html` has your pages listed
+- Confirm your LLM provider credential is configured and a model is selected on the chat model node
 
-**Anthropic Chat Model node shows as "not installed"**
-- Wrong typeVersion. Should be `1.3` for `lmChatAnthropic`.
+**Ingestion skill errors**
+- Ensure you're in the repo directory
+- Check `raw/` folder exists and has files
+- Try `/ingest raw/single-file.md` first
 
-**Sync Wiki Repo fails with "could not read Username"**
-- Repo URL is wrong (private repo). The shipped workflow uses the public GitHub URL.
+**Pages not in index.html**
+- The agent falls back to `list_wiki_files` (sees filenames only)
+- Without descriptions, it can't reason about relevance as well
+- Always update `index.html` after ingestion
+
+---
+
+## Workshop Complete! 🎉
+
+**You now have:**
+- ✅ Raw docs → wiki compilation (Claude Code)
+- ✅ Wiki → GitHub storage (git push)
+- ✅ Chatbot queries GitHub wiki (n8n)
+
+**The pattern:** Compile once, query forever
+
+---
+
+## Homework: Upgrade to Slackbot
+
+**Challenge:** Turn your HTTP webhook into a Slack bot
+
+**Current:**
+```bash
+curl → webhook → JSON response
+```
+
+**Goal:**
+```
+@bot what is X? → threaded reply with citations
+```
+
+**Hints:**
+1. Create Slack app at api.slack.com/apps
+2. Use n8n's **Slack Trigger** node (app mention event)
+3. Connect to existing **AI Agent** workflow
+4. Use **Slack → Send Message** node for replies
+5. Bonus: Add reactions (✅ for answered, ❓ for "not in KB")
+
+**Estimated time:** 30-45 minutes
+
+**Guide:** See `HOMEWORK-SLACK.md` (coming soon)
+
+---
 
 ## What's Next
 
-- **Add a chat UI**: build a simple HTML page that POSTs to the webhook
-- **Swap the model**: try Sonnet 4.5 for harder questions, or local Ollama for privacy
-- **Multi-repo**: clone several knowledge bases and let the agent search across them
-- **Embed-on-write lint**: add a workflow that validates new wiki pages on PR
+- **Obsidian integration** - Visualize your wiki as a graph
+- **qmd search** - Scale to 100+ pages with local hybrid search
+- **Multiple repos** - Query across several knowledge bases
+- **Lint workflow** - Add periodic wiki validation
 
-Have fun.
+**Full architecture guide:** See `README.md`
+
+---
+
+## Pattern Comparison
+
+| | RAG (vectors) | LLM Wiki |
+|---|---|---|
+| Storage | Embeddings DB | Markdown in git |
+| Retrieval | Similarity search | Agent navigates files |
+| Updates | Re-embed pipeline | `git push` |
+| Citations | Chunk IDs | Filenames |
+| Debug | Hard | Read the file |
+
+**More details:** See [`wiki/concepts/rag-vs-llm-wiki.md`](wiki/concepts/rag-vs-llm-wiki.md)
+
+---
+
+Have fun! 🚀

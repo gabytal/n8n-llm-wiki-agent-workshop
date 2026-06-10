@@ -65,17 +65,11 @@
       "position": [
         624,
         512
-      ],
-      "credentials": {
-        "anthropicApi": {
-          "id": "MlAfS2iaTQ1h70VI",
-          "name": "Anthropic account"
-        }
-      }
+      ]
     },
     {
       "parameters": {
-        "description": "List all available wiki markdown files with their relative paths and sizes. No input needed. Call this first to discover what content exists.",
+        "description": "Fallback tool: list all wiki markdown files with relative paths and sizes. No input needed. Only use this if the wiki INDEX in your system prompt doesn't cover the topic.",
         "jsCode": "const fs = require('fs');\nconst path = require('path');\n\ntry {\n  const wikiDir = '/tmp/wiki-repo/wiki';\n  const files = fs.readdirSync(wikiDir, { recursive: true });\n  const mdFiles = files.filter(f => typeof f === 'string' && f.endsWith('.md'));\n  const fileList = mdFiles.map(f => {\n    const fullPath = path.join(wikiDir, f);\n    const stats = fs.statSync(fullPath);\n    const sizeKb = (stats.size / 1024).toFixed(1);\n    return `- ${f} (${sizeKb}KB)`;\n  }).join('\\n');\n  return `Found ${mdFiles.length} wiki files:\\n${fileList}`;\n} catch (error) {\n  return `Error: ${error.message}`;\n}"
       },
       "id": "tool-list",

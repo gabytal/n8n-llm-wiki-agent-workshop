@@ -43,14 +43,16 @@ ls wiki/       # What categories exist (dynamic!)
 Use `[[page-name]]` syntax to connect related pages
 
 ### 5. Update Index
-Add entries to `wiki/index.md`:
+Add entries to `index.html` (the curated TOC the n8n agent reads):
 ```markdown
-## Entities
+## Entities (X pages)
 - **[Tool Name](wiki/entities/tool-name.md)** — One-line description
 
-## Concepts
+## Concepts (X pages)
 - **[Concept](wiki/concepts/concept.md)** — One-line description
 ```
+
+**CRITICAL:** `index.html` is what the n8n agent reads. Always update page counts and add clear descriptions.
 
 ### 6. Log Changes
 Append to `wiki/log.md`:

@@ -36,16 +36,15 @@ The agent fetches the latest wiki content from this public GitHub repo on every 
 ## Prerequisites
 
 - Docker + Docker Compose
-- An [Anthropic API key](https://console.anthropic.com/)
+- An account with any LLM provider supported by n8n (Anthropic, OpenAI, Google Gemini, Ollama, etc.)
+
+> **No API key is needed at startup.** You configure your LLM provider inside the n8n UI after the stack is running — see [Configure Your LLM Provider](#configure-your-llm-provider) below.
 
 ## Quick Start
 
 ```bash
 git clone https://github.com/gabytal/n8n-llm-wiki-agent-workshop.git
 cd n8n-llm-wiki-agent-workshop
-
-# Set your API key
-echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 
 # Start everything
 docker compose up -d
@@ -58,7 +57,17 @@ Open http://localhost:5678 and log in:
 - Email: `admin@localhost.local`
 - Password: `Admin123`
 
-The `Wiki AI Agent (Git)` workflow is imported automatically. **Activate it** with the toggle in the top-right of the workflow editor.
+The `Wiki AI Agent (Git)` workflow is imported automatically.
+
+## Configure Your LLM Provider
+
+The workflow ships without any provider credential — you wire up your own in the UI:
+
+1. Open the `Wiki AI Agent (Git)` workflow.
+2. Click the **chat model** node (it ships as an Anthropic node by default).
+   - **To use Anthropic:** click the node, create/select your **Anthropic** credential, and pick a model (e.g. `Claude Haiku 4.5`).
+   - **To use a different provider:** delete the node, add the chat model node for your provider (e.g. *OpenAI Chat Model*, *Ollama Chat Model*, *Google Gemini Chat Model*), connect its **ai_languageModel** output to the **AI Agent** node, add your credential, and select a model.
+3. **Activate** the workflow with the toggle in the top-right of the editor.
 
 ## Test It
 
